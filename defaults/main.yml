@@ -1,0 +1,90 @@
+---
+nginx_repo_file: "/etc/yum.repos.d/nginx.repo"
+epel_repo_url: "https://dl.fedoraproject.org/pub/epel/epel-release-latest-{{ ansible_distribution_major_version }}.noarch.rpm"
+epel_repo_gpg_key_url: "https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-{{ ansible_distribution_major_version }}"
+epel_repo_file: "/etc/yum.repos.d/epel.repo"
+
+
+# www.conf variables:
+php_user: nginx
+php_group: nginx
+
+# This will create Passbolt database
+mariadb_databases:
+  - name: passbolt
+mariadb_users:
+  - name: passbolt
+    password: somerandomepassword
+    priv: '*.*:ALL,GRANT'
+
+mariadb_root_password: 'Passw0rd_f4r_Maria'
+mariadb_version: '10.2'
+mariadb_swappiness: 0
+
+# Network configuration (network.cnf)
+mariadb_bind_address: '127.0.0.1'
+
+# Server configuration (server.cnf)
+mariadb_port: 3306
+mariadb_skip_name_resolve: 1
+mariadb_log_warnings: '1'
+mariadb_slow_query_log: '0'
+mariadb_long_query_time: '10'
+mariadb_max_connections: 505
+mariadb_max_user_connections: 500
+mariadb_max_allowed_packet: '16M'
+mariadb_max_heap_table_size: '16M'
+ansible_wait_timeout: 60
+mariadb_query_cache_size: 0
+mariadb_sort_buffer_size: '2M'
+mariadb_tmp_table_size: '16M'
+mariadb_read_buffer_size: '128k'
+mariadb_read_rnd_buffer_size: '256k'
+mariadb_join_buffer_size: '128k'
+mariadb_table_definition_cache: '1400'
+mariadb_table_open_cache: '2000'
+mariadb_table_open_cache_instances: '8'
+mariadb_innodb_strict_mode: 'ON'
+mariadb_innodb_file_format_check: 1
+mariadb_innodb_file_format: Barracuda
+mariadb_innodb_buffer_pool_size: '384M'
+mariadb_innodb_buffer_pool_instances: 8
+mariadb_innodb_file_per_table: 'ON'
+mariadb_innodb_flush_log_at_trx_commit: 1
+mariadb_innodb_log_buffer_size: '16M'
+mariadb_innodb_log_file_size: '48M'
+
+# Variables for gpg batch file:
+key_type: 'RSA'
+key_length: 2048
+expire_date: 0
+name_real: 'Passbolt Server'
+name_email: 'email5@passbolt.server'
+
+# Variables for nginx SSL cert
+openssl_subj_c: 'US'
+openssl_subj_st: 'MA'
+openssl_subj_l: 'Boston'
+openssl_subj_o: 'organisation'
+openssl_keyout: '/etc/ssl/certs/passbolt.key'
+openssl_certout: '/etc/ssl/certs/passbolt.crt'
+
+## Passbolt Configuration
+# Core.php
+security_salt: DYhG93b0qyJfIxfs2guVoUubWwvniR2G0FgaC9mi
+security_cipherseed: 76859309657453542496749683645
+fullBaseUrl: '{{ansible_hostname}}'
+
+# app.php
+serverkey_public: '/var/www/passbolt/app/Config/gpg/server_public_key.key'
+serverkey_private: '/var/www/passbolt/app/Config/gpg/server_private_key.key'
+keyring_directory: '/var/cache/nginx/.gnupg'
+
+# mail.php
+email_from: 'your@email.com'
+email_from_name: 'Passbolt'
+email_host: ''
+email_port: 587
+email_timeout: 30
+email_username: ''
+email_password: ''

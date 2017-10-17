@@ -1,0 +1,247 @@
+---
+- name: Check if nginx repo is installed
+  stat: path={{ nginx_repo_file }}
+  register: nginx_repo_file
+
+- name: Copy nginx repo file
+  copy:
+    src: files/nginx.repo
+    dest: /etc/yum.repos.d/nginx.repo
+    owner: root
+    group: root
+    mode: 0644
+  when: not nginx_repo_file.stat.exists
+
+- name: Check if epel repo is installed
+  stat: path={{ epel_repo_file }}
+  register: epel_repo_file
+
+- name: Install EPEL repo.
+  yum:
+    name: "{{ epel_repo_url }}"
+    state: present
+    validate_certs: no
+  register: result
+  until: '"failed" not in result'
+  retries: 5
+  delay: 10
+  when: not epel_repo_file.stat.exists
+
+- name: Import EPEL GPG key.
+  rpm_key:
+    key: "{{ epel_repo_gpg_key_url }}"
+    state: present
+  # when: not epel_repofile_result.stat.exists
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Install WebTatic repo
+  yum:
+    name: https://mirror.webtatic.com/yum/el7/webtatic-release.rpm
+    state: present
+    update_cache: yes
+
+- name: install Nginx and MariaDB
+  yum: state=present name={{ item }} update_cache=yes
+  with_items:
+    - nginx
+    - mariadb-server
+    - php70w-fpm
+    - php70w-opcache
+    - php70w-gd
+    - php70w-mysql
+    - php70w-mcrypt
+    - php70w-cli
+    - php70w-pear
+    - php70w-devel
+    - gpgme-devel
+    - gcc
+    - git
+    - rng-tools
+    - python2-pip
+
+- name: Edit PHP-FPM configuration file (change user and group to nginx)
+  template:
+    src: www.conf.j2
+    dest: /etc/php-fpm.d/www.conf
+
+- name: Creat a tmp folder under root to use with PECl
+  file:
+    path: /root/tmp
+    owner: root
+    group: root
+    state: directory
+    mode: 0755
+
+- name: reconfigure PECl tmp folder
+  shell: pear config-set temp_dir /root/tmp
+
+# Install pecl package
+- name: Install pecl package  GNUPG
+  pear:
+    name: pecl/gnupg
+    state: present
+
+- name: Copy gnupg.ini to activate module for PHP
+  copy:
+    src: files/gnupg.ini
+    dest: /etc/php.d/gnupg.ini
+    owner: root
+    group: root
+    mode: 0644
+    backup: yes
+
+# Role copied from: https://github.com/bertvv/ansible-role-mariadb
+
+- include: maria-install.yml
+- include: maria-config.yml
+- include: maria-root-password.yml
+- include: maria-databases.yml
+- include: maria-users.yml
+
+- name: Git clone Passbolt repo
+  git:
+    repo: https://github.com/passbolt/passbolt_api.git
+    dest: /var/www/passbolt
+
+- name: Change /var/www/passbolt/app/tmp to +w
+  file:
+    path: /var/www/passbolt/app/tmp
+    mode: "u+r,g+r,o+r"
+    recurse: yes
+
+- name: Change /var/www/passbolt/app/webroot/img/public to +w
+  file:
+    path: /var/www/passbolt/app/webroot/img/public
+    mode: "u+r,g+r,o+r"
+
+- name: Change owner of /var/www/passbolt/ to nginx
+  file:
+    path: /var/www/passbolt/
+    owner: nginx
+    group: nginx
+    recurse: yes
+
+- name: Copy GPG batch file
+  template:
+    src: gpg-batch.j2
+    dest: /root/tmp/gpg-batch
+
+- name: create copy of RNGD service
+  copy:
+    src: /usr/lib/systemd/system/rngd.service
+    dest: /etc/systemd/system/rngd.service
+    remote_src: yes
+
+- name: Edit ExecStart of RNGD service
+  lineinfile:
+    path: /etc/systemd/system/rngd.service
+    regexp: 'ExecStart.*'
+    line: 'ExecStart=/sbin/rngd -f -r /dev/urandom'
+    backup: yes
+
+- name: Make sure rngd is running/restarted
+  systemd:
+    daemon_reload: yes
+    state: restarted
+    name: rngd
+
+- name: Generate GPG key pair !!! THIS MAY TAKE LONG TIME !!!
+  shell: gpg --gen-key --batch /root/tmp/gpg-batch
+
+- name: Export secret key
+  shell: gpg --armor --export-secret-keys {{ name_email }} > {{ serverkey_private }}
+
+- name: Export public key
+  shell: gpg --armor --export {{ name_email }} > {{ serverkey_public }}
+
+- name: Get key fingerprint
+  shell: echo `gpg --fingerprint {{ name_email }} | sed -n '2p' | rev | awk '{NF=10}1' | rev | sed 's/ //g'`
+  register: serverkey_fingerprint
+
+- debug: var=serverkey_fingerprint
+
+- name: Create GNUPG key ring directory
+  file:
+    path: "{{ keyring_directory }}"
+    state: directory
+    owner: nginx
+    group: nginx
+    mode: 0700
+
+- name: create Passbolt core.php
+  template:
+    src: core.php.j2
+    dest: /var/www/passbolt/app/Config/core.php
+
+- name : Create Passbolt database.php
+  template:
+    src: database.php.j2
+    dest: /var/www/passbolt/app/Config/database.php
+
+
+- name: create Passbolt app.php
+  template:
+    src: app.php.j2
+    dest: /var/www/passbolt/app/Config/app.php
+
+- name: create Passbolt email.php
+  template:
+    src: email.php.j2
+    dest: /var/www/passbolt/app/Config/email.php
+
+- name: Create email cronjob
+  cron:
+    name: Passbolt send emails every minute
+    job: /var/www/passbolt/app/Console/cake EmailQueue.sender > /var/www/passbolt/app/tmp/email.log
+
+- name: Genarate SSL cert for nginx
+  shell: openssl req -new -newkey rsa:4096 -days 365 -nodes -x509 -subj "/C={{ openssl_subj_c }}/ST={{ openssl_subj_st }}/L={{ openssl_subj_l }}/O={{ openssl_subj_o }}/CN=https:\/\/{{ fullBaseUrl }}" -keyout {{ openssl_keyout }} -out {{ openssl_certout }}
+
+- name: PIP install pyOpenSSL
+  pip:
+    name: pyopenssl
+    version: 17.3.0
+
+- name: install pyopenssl rpm
+  yum:
+    name: ftp://195.220.108.108/linux/fedora/linux/development/rawhide/Everything/source/tree/Packages/p/pyOpenSSL-17.3.0-2.fc28.src.rpm
+    state: present
+
+# - name: Genarate SSL cert for nginx !!! Private key
+#   openssl_privatekey:
+#     path: "{{ openssl_keyout }}"
+#     type: RSA
+#     size: 4096
+#     state: present
+
+# - name: Genarate SSL cert for nginx !!! Public key
+#   openssl_publickey:
+#     path: "{{ openssl_certout }}"
+#     privatekey_path: "{{ openssl_keyout }}"
+#     state: present
+
+- name: Make Key readable by nginx
+  file:
+    path: "{{ openssl_keyout }}"
+    owner: root
+    group: nginx
+    mode: 0640
+
+- name: Make Cert readable by nginx
+  file:
+    path: "{{ openssl_certout }}"
+    owner: root
+    group: nginx
+    mode: 0640
+
+- name: Creat Nginx template
+  template:
+    src: nginx_conf.d_default.conf.j2
+    dest: /etc/nginx/conf.d/default.conf
+  notify: reload nginx
+
+- name: Install passbolt
+  shell: /var/www/passbolt/app/Console/cake install --no-admin --send-anonymous-statistics true
+  # become: true
+  # become_method: su
+  # become_user: nginx
